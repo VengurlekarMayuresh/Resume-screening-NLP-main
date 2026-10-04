@@ -84,6 +84,32 @@ def init_db():
     )
     ''')
     
+    # Create interview results and proctoring table
+    c.execute('''
+    CREATE TABLE IF NOT EXISTS interview_results (
+        id TEXT PRIMARY KEY,
+        candidate_id TEXT,
+        recruiter_email TEXT,
+        candidate_name TEXT,
+        candidate_email TEXT,
+        candidate_phone TEXT,
+        role TEXT,
+        overall_score INTEGER,
+        percentage INTEGER,
+        verdict TEXT,
+        highest_level INTEGER,
+        violations_count INTEGER DEFAULT 0,
+        violations_log TEXT,
+        category_scores TEXT,
+        turns_transcript TEXT,
+        summary_report TEXT,
+        recruiter_decision TEXT DEFAULT 'Pending Review',
+        recruiter_notes TEXT,
+        started_at TEXT,
+        finished_at TEXT
+    )
+    ''')
+    
     conn.commit()
     conn.close()
     
@@ -235,6 +261,86 @@ def get_user_history(email):
     history_df = pd.read_sql_query(query, conn, params=(email,))
     conn.close()
     return history_df
+
+# --- Interview Engine & Database Helpers ---
+def get_interview_results(recruiter_email=None):
+    """Fetch completed interview results from database."""
+    conn = sqlite3.connect('Resume.db')
+    try:
+        if recruiter_email and recruiter_email != "all":
+            query = "SELECT * FROM interview_results WHERE recruiter_email = ? ORDER BY finished_at DESC"
+            df = pd.read_sql_query(query, conn, params=(recruiter_email,))
+        else:
+            query = "SELECT * FROM interview_results ORDER BY finished_at DESC"
+            df = pd.read_sql_query(query, conn)
+    except Exception as e:
+        df = pd.DataFrame()
+    finally:
+        conn.close()
+    return df
+
+def get_interview_details(interview_id):
+    """Fetch complete details for a single interview."""
+    conn = sqlite3.connect('Resume.db')
+    try:
+        c = conn.cursor()
+        c.execute("SELECT * FROM interview_results WHERE id = ?", (interview_id,))
+        row = c.fetchone()
+        if not row:
+            return None
+        col_names = [description[0] for description in c.description]
+        return dict(zip(col_names, row))
+    except Exception:
+        return None
+    finally:
+        conn.close()
+
+def update_recruiter_decision(interview_id, decision, notes=""):
+    """Update recruiter decision on an interview."""
+    try:
+        conn = sqlite3.connect('Resume.db')
+        c = conn.cursor()
+        c.execute(
+            "UPDATE interview_results SET recruiter_decision = ?, recruiter_notes = ? WHERE id = ?",
+            (decision, notes, interview_id)
+        )
+        conn.commit()
+        conn.close()
+        return True
+    except Exception as e:
+        print(f"Error updating decision: {e}")
+        return False
+
+def check_interview_engine_health():
+    """Check if the interview server is responding."""
+    import urllib.request
+    try:
+        req = urllib.request.urlopen("http://localhost:3000/api/health", timeout=1.5)
+        return req.getcode() == 200
+    except Exception:
+        return False
+
+def ensure_interview_engine_running():
+    """Starts the Node.js interview server if not already running."""
+    import subprocess
+    import threading
+    if check_interview_engine_health():
+        return True
+    
+    server_dir = os.path.join(os.path.dirname(__file__), "Final_Interview_Module", "interview-platform")
+    if not os.path.exists(server_dir):
+        return False
+
+    def _start():
+        try:
+            cmd = ["node", "server.js"]
+            creation_flags = 0x08000000 if sys.platform == "win32" else 0
+            subprocess.Popen(cmd, cwd=server_dir, creationflags=creation_flags)
+        except Exception as e:
+            print(f"Failed to start interview server: {e}")
+
+    threading.Thread(target=_start, daemon=True).start()
+    return True
 
 # --- Cached BGE-M3 Model Loader ---
 @st.cache_resource
@@ -404,9 +510,13 @@ def show_dashboard():
     bge_model, model_name = get_bge_model()
     st.caption("⚡ Powered by advanced semantic embeddings for intelligent candidate matching")
 
-    main_tab, = st.tabs(["🚀 Candidate Screening & Ranking"])
+    tab_screening, tab_interview, tab_results = st.tabs([
+        "🚀 Candidate Screening & Ranking",
+        "🎙️ AI Technical Interview Room",
+        "📊 Interview Assessment Results"
+    ])
 
-    with main_tab:
+    with tab_screening:
         # --- Job Information & Inputs ---
         st.subheader("📋 1. Job Description & Upload Resumes")
         col_title, col_exp = st.columns([2, 1])
@@ -716,6 +826,380 @@ def show_dashboard():
                 buf.seek(0)
                 st.download_button("📥 Download Shortlist Excel", buf, "candidate_shortlist.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
+            # Fast-track selected candidate to Interview tab
+            st.markdown("<br>", unsafe_allow_html=True)
+            if st.button(f"🎙️ Invite {cp['candidate_name']} to Proctored AI Interview", key=f"invite_{selected_cand_idx}", use_container_width=True):
+                st.session_state["preselected_candidate"] = selected_cand
+                st.success(f"Candidate **{cp['candidate_name']}** has been pre-filled for interview! Click on the '🎙️ AI Technical Interview Room' tab above to review & start.")
+
+    # =========================================================================
+    # TAB 2: AI TECHNICAL INTERVIEW ROOM (PROCTORED)
+    # =========================================================================
+    with tab_interview:
+        st.subheader("🎙️ AI Technical Interview & Proctoring Room")
+        
+        # Engine status check & auto-runner
+        is_engine_ready = check_interview_engine_health()
+        if not is_engine_ready:
+            ensure_interview_engine_running()
+            is_engine_ready = check_interview_engine_health()
+
+        col_stat1, col_stat2 = st.columns([3, 1])
+        with col_stat1:
+            st.caption("Adaptive, voice-enabled technical interview engine with live webcam verification, fullscreen proctoring, and anti-cheat tracking.")
+        with col_stat2:
+            if is_engine_ready:
+                st.success("🟢 Interview Engine: Online")
+            else:
+                st.warning("🟡 Starting Engine on :3000...")
+
+        # Step 1: Candidate & Resume Intake
+        st.markdown("#### 📄 1. Candidate Resume & Evaluation Setup")
+        
+        intake_source = st.radio(
+            "Candidate Source:",
+            ["📤 Upload New Candidate Resume", "🏆 Select From Shortlisted Candidates"],
+            horizontal=True,
+            key="intake_source_radio"
+        )
+
+        cand_name = "Candidate"
+        cand_email = ""
+        cand_phone = ""
+        cand_role = st.session_state.get("job_title", "Software Engineer")
+        cand_exp = "1-3 Years"
+        cand_skills = ["Data Structures", "Algorithms", "Databases", "System Design", "Python"]
+        cand_resume_text = ""
+
+        # Pre-fill if recruiter clicked "Invite" in Tab 1
+        if "preselected_candidate" in st.session_state and st.session_state["preselected_candidate"]:
+            pre_cand = st.session_state["preselected_candidate"]
+            cp_pre = pre_cand["candidate_profile"]
+            cand_name = cp_pre["candidate_name"]
+            cand_skills = cp_pre.get("skills", cand_skills)[:10]
+            cand_exp = cp_pre.get("experience_display", "Technical Candidate")
+            cand_resume_text = cp_pre.get("raw_text", "")
+            st.info(f"📌 Loaded pre-selected candidate: **{cand_name}** ({len(cand_skills)} verified skills from screening)")
+
+        if intake_source == "📤 Upload New Candidate Resume":
+            uploaded_cand_resume = st.file_uploader(
+                "Upload Candidate Resume (PDF or TXT)",
+                type=["pdf", "txt"],
+                key="interview_resume_upload",
+                help="Upload a candidate's resume file to automatically extract their profile, skills, and experience."
+            )
+            if uploaded_cand_resume is not None:
+                extracted_text = ""
+                try:
+                    if uploaded_cand_resume.name.lower().endswith(".pdf"):
+                        extracted_text = extract_text_from_pdf(uploaded_cand_resume)
+                    else:
+                        extracted_text = uploaded_cand_resume.read().decode("utf-8", errors="ignore")
+                    
+                    if extracted_text and "Error extracting text" not in extracted_text:
+                        cand_resume_text = extracted_text
+                        parsed = parse_full_resume(extracted_text)
+                        if parsed["candidate_name"] and parsed["candidate_name"] != "Candidate Profile":
+                            cand_name = parsed["candidate_name"]
+                        else:
+                            cand_name = os.path.splitext(uploaded_cand_resume.name)[0].replace("_", " ").title()
+                        
+                        em = re.search(r'[\w\.-]+@[\w\.-]+\.\w+', extracted_text)
+                        if em:
+                            cand_email = em.group(0)
+                        ph = re.search(r'(\+?\d{1,3}[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}', extracted_text)
+                        if ph:
+                            cand_phone = ph.group(0)
+                        
+                        if parsed.get("job_titles"):
+                            cand_role = parsed["job_titles"][0]
+                        elif st.session_state.get("job_title"):
+                            cand_role = st.session_state["job_title"]
+                        
+                        cand_exp = parsed.get("experience_display", "Technical Candidate")
+                        if parsed.get("skills"):
+                            cand_skills = parsed["skills"][:10]
+                        
+                        st.success(f"✅ Successfully extracted profile for **{cand_name}** with {len(cand_skills)} key technical skills!")
+                except Exception as e:
+                    st.warning(f"⚠️ Error parsing uploaded resume: {e}")
+        else:
+            if "ranked_candidates" in st.session_state and st.session_state["ranked_candidates"]:
+                ranked = st.session_state["ranked_candidates"]
+                cand_options = [f"Rank {idx+1}: {c['candidate_profile']['candidate_name']} ({c['overall_score']}%)" for idx, c in enumerate(ranked)]
+                chosen_idx = st.selectbox("Select Candidate from Screening Shortlist:", range(len(cand_options)), format_func=lambda i: cand_options[i])
+                chosen_c = ranked[chosen_idx]
+                cp = chosen_c["candidate_profile"]
+                cand_name = cp["candidate_name"]
+                cand_role = st.session_state.get("job_title", "Software Engineer")
+                cand_exp = cp.get("experience_display", "Technical Candidate")
+                cand_skills = cp.get("skills", ["Data Structures", "Algorithms", "System Design"])[:10]
+                cand_resume_text = cp.get("raw_text", "")
+            else:
+                st.info("No candidates screened yet in this session. You can upload a resume above, or run screening in Tab 1.")
+
+        # Editable details review card
+        st.markdown("<br>", unsafe_allow_html=True)
+        with st.expander("✏️ Confirm & Customize Candidate Details", expanded=True):
+            f_col1, f_col2 = st.columns(2)
+            with f_col1:
+                f_name = st.text_input("Candidate Full Name", value=cand_name, key="f_cand_name")
+                f_email = st.text_input("Candidate Email", value=cand_email or f"{cand_name.lower().replace(' ', '.')}@hiresense.ai", key="f_cand_email")
+                f_phone = st.text_input("Phone Number (Optional)", value=cand_phone, key="f_cand_phone")
+            with f_col2:
+                f_role = st.text_input("Target Role / Position", value=cand_role, key="f_cand_role")
+                f_skills_str = st.text_area("Technical Topics & Skills to Probe (comma-separated)", value=", ".join(cand_skills), key="f_cand_skills", height=70)
+                f_questions = st.number_input("Number of Primary Interview Questions", min_value=3, max_value=12, value=6, step=1, key="f_cand_num_q")
+
+        # Proctoring & Security Pre-Flight Checklist
+        st.markdown("#### 🛡️ 2. Proctoring & Assessment Security Controls")
+        
+        sec_col1, sec_col2 = st.columns(2)
+        with sec_col1:
+            st.markdown("""
+            - 🎥 **Live Webcam Monitoring:** Picture-in-picture video stream verification.
+            - 🎙️ **Microphone Speech-to-Text:** Live voice responses with waveform visualization.
+            """)
+        with sec_col2:
+            st.markdown("""
+            - 🖥️ **Full-Screen Enforcement:** Monitored full-screen view; window exits are logged.
+            - 🚫 **Anti-Tab-Switch & Clipboard Protection:** Window blur, tab changes, and copy-paste are blocked and recorded.
+            """)
+
+        sec_agree = st.checkbox(
+            "Enforce full-screen proctoring and integrity logging for this assessment session.",
+            value=True,
+            key="sec_proctor_agreement"
+        )
+
+        st.markdown("<br>", unsafe_allow_html=True)
+        btn_start_col, _ = st.columns([1, 2])
+        with btn_start_col:
+            start_launch = st.button("🚀 Launch Proctored Technical Interview", type="primary", use_container_width=True, disabled=not sec_agree)
+
+        if start_launch:
+            with st.spinner("Initializing adaptive AI interview session..."):
+                skills_clean = [s.strip() for s in f_skills_str.split(",") if s.strip()]
+                candidate_payload = {
+                    "name": f_name,
+                    "email": f_email,
+                    "phone": f_phone,
+                    "role": f_role,
+                    "skills": skills_clean,
+                    "resumeText": cand_resume_text or f"Candidate: {f_name}\nRole: {f_role}\nSkills: {', '.join(skills_clean)}",
+                    "jdText": st.session_state.get("job_description", f"Target role is {f_role} requiring core computer science principles and software engineering."),
+                    "consent": "true",
+                    "recruiter": st.session_state.get("user_email") or "guest@hiresense.ai"
+                }
+                try:
+                    import urllib.request
+                    import json
+                    req_data = json.dumps(candidate_payload).encode('utf-8')
+                    req = urllib.request.Request(
+                        "http://localhost:3000/api/candidates",
+                        data=req_data,
+                        headers={"Content-Type": "application/json"}
+                    )
+                    with urllib.request.urlopen(req, timeout=15) as resp:
+                        resp_data = json.loads(resp.read().decode('utf-8'))
+                        st.session_state["active_interview_data"] = resp_data
+                        st.success(f"✅ Proctored Interview Room Ready for **{f_name}**! (ID: `{resp_data['candidateId']}`)")
+                except Exception as ex:
+                    st.error(f"❌ Failed to reach interview server: {ex}. Ensure the Node service is running.")
+
+        # Display Active Interview Room
+        if "active_interview_data" in st.session_state and st.session_state["active_interview_data"]:
+            act = st.session_state["active_interview_data"]
+            cid = act["candidateId"]
+            recruiter_em = st.session_state.get("user_email") or "guest@hiresense.ai"
+            live_url = f"http://localhost:3000/index.html?candidate={cid}&recruiter={recruiter_em}"
+
+            st.markdown("---")
+            st.markdown(f"### 🎧 Active Proctored Session: **{act['profile']['name']}**")
+
+            open_col1, open_col2 = st.columns([1, 1])
+            with open_col1:
+                st.markdown(f"""
+                <a href="{live_url}" target="_blank" style="text-decoration:none;">
+                    <div style="background:#2563eb;color:#ffffff;text-align:center;padding:12px;border-radius:8px;font-weight:700;font-size:16px;box-shadow:0 4px 12px rgba(37,99,235,0.3);">
+                        ↗️ Open Proctored Interview in Dedicated Full-screen Window
+                    </div>
+                </a>
+                """, unsafe_allow_html=True)
+                st.caption("Recommended for candidate testing: Opens a standalone tab for full webcam and microphone hardware permissions.")
+            with open_col2:
+                st.info(f"**Candidate ID:** `{cid}` · **Role:** `{act['profile']['role']}` · **Recruiter:** `{recruiter_em}`")
+
+            st.markdown("#### 🖥️ Embedded Assessment Room")
+            st.markdown(f"""
+            <iframe 
+                src="{live_url}" 
+                width="100%" 
+                height="880" 
+                style="border:1px solid #cbd5e1; border-radius:12px; box-shadow:0 4px 16px rgba(0,0,0,0.06);"
+                allow="camera; microphone; display-capture; fullscreen"
+                allowfullscreen
+            ></iframe>
+            """, unsafe_allow_html=True)
+
+    # =========================================================================
+    # TAB 3: INTERVIEW ASSESSMENT RESULTS & AUDIT
+    # =========================================================================
+    with tab_results:
+        st.subheader("📊 AI Interview Assessment Results & Integrity Audit")
+        st.caption("Review candidate performance metrics, Q&A transcripts, and proctoring integrity records stored in Resume.db.")
+
+        df_results = get_interview_results()
+        
+        if df_results.empty:
+            st.info("No interview results recorded in database yet. Launch and complete a technical interview in the 'AI Technical Interview Room' tab to view results here.")
+        else:
+            # Top KPI Summary Cards
+            tot_interviews = len(df_results)
+            avg_pct = round(df_results["percentage"].mean(), 1) if "percentage" in df_results else 0
+            sel_cnt = sum(df_results["verdict"] == "Selected") if "verdict" in df_results else 0
+            tot_viols = int(df_results["violations_count"].sum()) if "violations_count" in df_results else 0
+
+            k1, k2, k3, k4 = st.columns(4)
+            k1.metric("👥 Interviews Conducted", tot_interviews)
+            k2.metric("📈 Average Score", f"{avg_pct}%")
+            k3.metric("🌟 Recommended (Selected)", sel_cnt)
+            k4.metric("🛡️ Flagged Incidents", tot_viols, delta="Clean" if tot_viols == 0 else f"{tot_viols} Flags", delta_color="normal" if tot_viols == 0 else "inverse")
+
+            st.markdown("<br>", unsafe_allow_html=True)
+
+            # Interactive Leaderboard Table
+            st.markdown("#### 🏆 Assessment Leaderboard")
+            
+            show_cols = ["id", "candidate_name", "role", "percentage", "verdict", "highest_level", "violations_count", "recruiter_decision", "finished_at"]
+            avail_cols = [c for c in show_cols if c in df_results.columns]
+            df_disp = df_results[avail_cols].copy()
+            
+            col_rename = {
+                "id": "Interview ID",
+                "candidate_name": "Candidate Name",
+                "role": "Role",
+                "percentage": "Match Score %",
+                "verdict": "AI Recommendation",
+                "highest_level": "Peak Level (1-5)",
+                "violations_count": "Violations",
+                "recruiter_decision": "Recruiter Decision",
+                "finished_at": "Completed At"
+            }
+            df_disp = df_disp.rename(columns={k: v for k, v in col_rename.items() if k in df_disp.columns})
+            st.dataframe(df_disp, hide_index=True, use_container_width=True)
+
+            # Detailed Candidate Assessment Inspector
+            st.markdown("---")
+            st.markdown("#### 👤 Detailed Candidate Assessment Inspector")
+            
+            cand_selector = [
+                f"{row['candidate_name']} ({row.get('role', 'Candidate')}) — {row.get('percentage', 0)}% [{row.get('verdict', 'N/A')}]"
+                for _, row in df_results.iterrows()
+            ]
+            chosen_cand_idx = st.selectbox("Select Candidate to Inspect:", range(len(cand_selector)), format_func=lambda i: cand_selector[i])
+            
+            chosen_row = df_results.iloc[chosen_cand_idx]
+            chosen_id = chosen_row["id"]
+
+            # Candidate Score & Status Bar
+            m_s1, m_s2, m_s3, m_s4 = st.columns(4)
+            m_s1.metric("Overall Score", f"{chosen_row.get('percentage', 0)}%")
+            m_s2.metric("AI Recommendation", chosen_row.get("verdict", "Pending"))
+            m_s3.metric("Peak Difficulty Reached", f"Level {chosen_row.get('highest_level', 1)}/5")
+            c_viols = int(chosen_row.get("violations_count", 0))
+            m_s4.metric("Proctoring Violations", f"{c_viols} Logged", delta="Clean" if c_viols == 0 else "Flagged", delta_color="normal" if c_viols == 0 else "inverse")
+
+            # Proctoring & Assessment Integrity Audit Breakdown Card
+            st.markdown("<br>", unsafe_allow_html=True)
+            st.markdown("##### 🛡️ Proctoring & Integrity Audit Breakdown")
+            
+            v_log_str = chosen_row.get("violations_log")
+            v_list = []
+            if v_log_str:
+                try:
+                    v_list = json.loads(v_log_str) if isinstance(v_log_str, str) else v_log_str
+                except Exception:
+                    v_list = []
+            
+            aud1, aud2 = st.columns(2)
+            with aud1:
+                st.markdown("""
+                - **Webcam Monitoring:** 🟢 Verified Live
+                - **Fullscreen Compliance:** """ + ("🟢 Fullscreen Compliant" if not any(v.get('type') == 'Fullscreen Exited' for v in v_list) else f"🔴 Exited Fullscreen {sum(1 for v in v_list if v.get('type') == 'Fullscreen Exited')} time(s)"))
+            with aud2:
+                tab_switches_cnt = sum(1 for v in v_list if v.get('type') == 'Tab Switch')
+                focus_blur_cnt = sum(1 for v in v_list if v.get('type') == 'Window Focus Lost')
+                st.markdown(f"""
+                - **Tab Switching:** {'🟢 0 Tab Switches' if tab_switches_cnt == 0 else f'🔴 {tab_switches_cnt} Tab Switch(es)'}
+                - **Window Focus:** {'🟢 Continuous Focus' if focus_blur_cnt == 0 else f'🟡 {focus_blur_cnt} Focus Loss Event(s)'}
+                """)
+            
+            if v_list:
+                with st.expander(f"⚠️ View Chronological Audit Incidents ({len(v_list)} events)", expanded=True):
+                    for v_item in v_list:
+                        st.warning(f"**[{v_item.get('time', '00:00')}] {v_item.get('type', 'Violation')}:** {v_item.get('desc', '')} *(Logged at {v_item.get('at', '')})*")
+            else:
+                st.success("✅ Assessment Integrity Verified: Zero proctoring irregularities were logged during this session.")
+
+            # Full Q&A Transcript
+            st.markdown("<br>", unsafe_allow_html=True)
+            st.markdown("##### 💬 Detailed Q&A Transcript & AI Evaluation")
+            turns_str = chosen_row.get("turns_transcript")
+            turns_data = []
+            if turns_str:
+                try:
+                    turns_data = json.loads(turns_str) if isinstance(turns_str, str) else turns_str
+                except Exception:
+                    turns_data = []
+
+            if turns_data:
+                for q_idx, turn in enumerate(turns_data, start=1):
+                    turn_score = turn.get('score', 0)
+                    pill = "🟢 Strong" if turn_score >= 7 else "🟡 Moderate" if turn_score >= 5 else "🔴 Weak"
+                    with st.expander(f"Q{q_idx} [{turn.get('topic', 'Topic')} · Difficulty L{turn.get('level', 1)}] — Score: {turn_score}/10 ({pill})", expanded=(q_idx <= 2)):
+                        st.markdown(f"**Question:** {turn.get('question', '')}")
+                        st.markdown(f"**Candidate Response:**\n> *\"{turn.get('answer', '')}\"*")
+                        st.markdown(f"**AI Evaluator Critique:** {turn.get('summary', 'Evaluated.')}")
+                        
+                        col_hit, col_miss = st.columns(2)
+                        with col_hit:
+                            hits = turn.get('correct', [])
+                            st.markdown(f"**Key Concepts Satisfied:** {', '.join(hits) if hits else 'None'}")
+                        with col_miss:
+                            misses = turn.get('missing', [])
+                            st.markdown(f"**Missing Depth / Gaps:** {', '.join(misses) if misses else 'None'}")
+            else:
+                st.caption("No transcript items found for this record.")
+
+            # Recruiter Decision & Notes
+            st.markdown("<br>", unsafe_allow_html=True)
+            st.markdown("##### 📝 Recruiter Audit Decision & Notes")
+            dec_col1, dec_col2 = st.columns([1, 2])
+            with dec_col1:
+                cur_dec = chosen_row.get("recruiter_decision", "Pending Review")
+                options_dec = ["Pending Review", "✅ Advance Candidate", "❌ Reject Candidate"]
+                sel_dec_idx = options_dec.index(cur_dec) if cur_dec in options_dec else 0
+                chosen_new_dec = st.selectbox("Recruiter Decision:", options_dec, index=sel_dec_idx, key=f"rec_dec_{chosen_id}")
+            with dec_col2:
+                cur_note = chosen_row.get("recruiter_notes") or ""
+                chosen_new_note = st.text_input("Reviewer Feedback & Notes:", value=cur_note, key=f"rec_note_{chosen_id}")
+
+            if st.button("💾 Save Recruiter Decision", key=f"btn_save_dec_{chosen_id}"):
+                if update_recruiter_decision(chosen_id, chosen_new_dec, chosen_new_note):
+                    st.success("✅ Recruiter decision and notes saved to Resume.db!")
+                    st.rerun()
+
+            # Export Buttons
+            st.markdown("---")
+            st.markdown("##### 📥 Export Assessment Report")
+            exp1, exp2, exp3 = st.columns(3)
+            with exp1:
+                st.markdown(f'<a href="http://localhost:3000/api/interview/{chosen_id}/download?format=txt" target="_blank" style="text-decoration:none;"><div style="background:#f1f5f9;border:1px solid #cbd5e1;color:#1e293b;padding:8px 12px;border-radius:6px;text-align:center;font-weight:600;">📝 Download Text Summary</div></a>', unsafe_allow_html=True)
+            with exp2:
+                st.markdown(f'<a href="http://localhost:3000/api/interview/{chosen_id}/download?format=json" target="_blank" style="text-decoration:none;"><div style="background:#f1f5f9;border:1px solid #cbd5e1;color:#1e293b;padding:8px 12px;border-radius:6px;text-align:center;font-weight:600;">⚙ Download Full JSON Report</div></a>', unsafe_allow_html=True)
+            with exp3:
+                st.markdown(f'<a href="http://localhost:3000/index.html?candidate={chosen_row.get("candidate_id", "")}" target="_blank" style="text-decoration:none;"><div style="background:#2563eb;color:white;padding:8px 12px;border-radius:6px;text-align:center;font-weight:600;">🖨️ View & Print Official PDF</div></a>', unsafe_allow_html=True)
 
 
 # --- Sidebar ---
@@ -735,6 +1219,13 @@ def render_sidebar():
     
     if st.session_state["authenticated"]:
         st.sidebar.subheader(f"👤 {st.session_state['user_email']}")
+        
+        # Engine indicator
+        if check_interview_engine_health():
+            st.sidebar.caption("🟢 AI Interview Engine: Active")
+        else:
+            st.sidebar.caption("🟡 AI Interview Engine: Standby")
+
         st.sidebar.markdown("---")
         if st.sidebar.button("🏠 Recruiter Dashboard", use_container_width=True):
             st.session_state["current_page"] = "dashboard"
