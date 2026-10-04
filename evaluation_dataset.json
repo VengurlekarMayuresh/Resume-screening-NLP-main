@@ -1,0 +1,58 @@
+[
+  {
+    "eval_id": "eval_1",
+    "job_title": "Python Backend Developer",
+    "job_description": "Looking for a Python backend developer experienced in REST APIs, FastAPI, PostgreSQL, and Docker. Must have 3+ years of experience in backend microservices.",
+    "candidates": [
+      {
+        "candidate_name": "Rahul Sharma",
+        "resume_text": "Experienced Python Backend Developer with 4 years of experience building RESTful APIs using FastAPI and Django. Proficient in PostgreSQL, Docker, Redis, and microservices architecture.",
+        "ground_truth": "Strong Match",
+        "relevance_grade": 3
+      },
+      {
+        "candidate_name": "Priya Patel",
+        "resume_text": "Software Engineer with 3 years of experience. Developed web backends using Python and Flask. Experience with MySQL database, REST APIs, and AWS.",
+        "ground_truth": "Moderate Match",
+        "relevance_grade": 2
+      },
+      {
+        "candidate_name": "Amit Kumar",
+        "resume_text": "Frontend developer with 2 years experience in React.js, HTML, CSS, JavaScript, and UI styling. Basic knowledge of Python.",
+        "ground_truth": "Weak Match",
+        "relevance_grade": 1
+      },
+      {
+        "candidate_name": "Neha Singh",
+        "resume_text": "Digital Marketing Specialist with expertise in SEO, content creation, social media management, and Google Analytics.",
+        "ground_truth": "Not Relevant",
+        "relevance_grade": 0
+      }
+    ]
+  },
+  {
+    "eval_id": "eval_2",
+    "job_title": "Data Scientist / ML Engineer",
+    "job_description": "Seeking a Data Scientist proficient in Python, Machine Learning, Deep Learning, PyTorch, Scikit-Learn, and NLP. Experience with data pipelines and model deployment required.",
+    "candidates": [
+      {
+        "candidate_name": "Ananya Roy",
+        "resume_text": "Data Scientist with 3.5 years experience in machine learning, deep learning, PyTorch, Scikit-Learn, and NLP model fine-tuning. Built end-to-end data pipelines.",
+        "ground_truth": "Strong Match",
+        "relevance_grade": 3
+      },
+      {
+        "candidate_name": "Vikas Verma",
+        "resume_text": "Data Analyst with 2 years experience in SQL, Excel, Tableau, Power BI, and basic Python data analysis with Pandas.",
+        "ground_truth": "Moderate Match",
+        "relevance_grade": 2
+      },
+      {
+        "candidate_name": "Suresh Gupta",
+        "resume_text": "Java Backend Developer with 5 years experience in Spring Boot, Oracle, and enterprise Java application development.",
+        "ground_truth": "Not Relevant",
+        "relevance_grade": 0
+      }
+    ]
+  }
+]

@@ -1,0 +1,10 @@
+streamlit==1.32.2
+pandas==2.2.2
+pypdf==4.1.0
+scikit-learn==1.4.2
+openpyxl
+spacy>=3.7.0
+torch
+sentence-transformers
+transformers
+numpy
