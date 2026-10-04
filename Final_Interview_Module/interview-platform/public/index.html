@@ -115,7 +115,6 @@ table{width:100%;border-collapse:collapse;font-size:13px;margin-top:8px}td,th{pa
 }
 </style></head><body>
 <div id="secAlertToast" class="sec-alert-toast hide"><span class="sec-alert-icon">⚠️</span><span id="secAlertMsg">Security alert</span></div>
-<div id="fsWarningModal" class="fs-modal hide"><div class="fs-modal-box"><h3>⚠️ Security Notice: Fullscreen Exited</h3><p>This technical interview is monitored by proctoring. Please maintain full-screen or maximized view to ensure assessment fairness. Your window state has been logged.</p><div style="display:flex;gap:10px;justify-content:center;margin-top:14px;"><button class="btn p" id="btnReenterFs">Return to Full-screen Mode</button><button class="btn s" id="btnDismissFs" style="background:#f1f5f9;color:#334155;border:1px solid #cbd5e1;">Continue Proctored Session</button></div></div></div>
 <header><div><h1>Technical interview</h1><small id="sub">Structured adaptive assessment</small></div>
 <div class="hr"><select id="persona"><option value="f">Interviewer: Avery (F)</option><option value="m">Interviewer: Arjun (M)</option></select><span>⏱ <b id="tm">00:00</b></span></div></header>
 
@@ -299,34 +298,10 @@ window.addEventListener('blur',function(){
 });
 document.addEventListener('fullscreenchange',function(){
   if(running&&!isWindowFullscreen()){
-    logViolation('Fullscreen Exited','Candidate exited full-screen proctored mode');
-    var modal=$('fsWarningModal');if(modal)modal.classList.remove('hide');
+    logViolation('Fullscreen Exited','Candidate changed window dimensions from full-screen');
+    showSecurityToast('ℹ️ Notice: Full-screen view is recommended for proctored evaluation.');
   }
 });
-window.addEventListener('resize',function(){
-  if(isWindowFullscreen()){
-    var modal=$('fsWarningModal');if(modal)modal.classList.add('hide');
-  }
-});
-var reenterBtn=$('btnReenterFs');
-if(reenterBtn){
-  reenterBtn.onclick=function(){
-    var modal=$('fsWarningModal');if(modal)modal.classList.add('hide');
-    try{
-      if(document.documentElement.requestFullscreen){
-        document.documentElement.requestFullscreen().catch(function(e){
-          console.warn('Fullscreen request bypassed:',e);
-        });
-      }
-    }catch(err){}
-  };
-}
-var dismissFsBtn=$('btnDismissFs');
-if(dismissFsBtn){
-  dismissFsBtn.onclick=function(){
-    var modal=$('fsWarningModal');if(modal)modal.classList.add('hide');
-  };
-}
 
 /* ---- 4. UI + speech ---- */
 var synth=window.speechSynthesis,SR=window.SpeechRecognition||window.webkitSpeechRecognition;
